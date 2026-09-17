@@ -53,7 +53,7 @@ async def test_read_message_round_trip():
 
 @pytest.mark.asyncio
 async def test_read_message_raises_on_truncated_header():
-    reader = make_reader(b"\x00\x01")  # only 2 of 4 header bytes
+    reader = make_reader(b"\x00\x01")
 
     with pytest.raises(ConnectionError):
         await read_message(reader)
@@ -62,7 +62,7 @@ async def test_read_message_raises_on_truncated_header():
 @pytest.mark.asyncio
 async def test_read_message_raises_on_truncated_body():
     header = (10).to_bytes(4, "big")
-    reader = make_reader(header + b"short")  # declares 10 bytes, sends 5
+    reader = make_reader(header + b"short")
 
     with pytest.raises(ConnectionError):
         await read_message(reader)
@@ -70,7 +70,7 @@ async def test_read_message_raises_on_truncated_body():
 
 @pytest.mark.asyncio
 async def test_read_message_rejects_oversized_declared_length():
-    header = (20 * 1024 * 1024).to_bytes(4, "big")  # 20 MiB, no body sent
+    header = (20 * 1024 * 1024).to_bytes(4, "big")
     reader = make_reader(header)
 
     with pytest.raises(MessageTooLargeError):
