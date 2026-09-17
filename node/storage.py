@@ -39,3 +39,12 @@ class StorageManager:
             raise FileNotFoundError(f"Chunk not found: {chunk_id}")
 
         chunk_path.unlink()
+
+    def info(self, chunk_id: str) -> dict:
+        chunk_path = self._get_chunk_path(chunk_id)
+
+        if not chunk_path.is_file():
+            raise FileNotFoundError(f"Chunk not found: {chunk_id}")
+
+        stat = chunk_path.stat()
+        return {"chunk_id": chunk_id, "size": stat.st_size}
