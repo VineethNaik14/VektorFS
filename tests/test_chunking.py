@@ -71,3 +71,15 @@ def test_missing_chunk_raises_error(tmp_path: Path):
             [str(missing_chunk)],
             str(output),
         )
+
+def test_scan_file_hashes_and_chunk_math(tmp_path):
+    import hashlib
+    from common.chunking import chunk_count, read_chunk, scan_file
+    data = bytes(range(256)) * 10          # 2560 bytes
+    f = tmp_path / "f"; f.write_bytes(data)
+    scan = scan_file(str(f), 1000)
+    assert [c.size for c in scan.chunks] == [1000, 1000, 560]
+    assert scan.sha256 == hashlib.sha256(data).hexdigest()
+    assert chunk_count(2560, 1000) == 3 and chunk_count(0, 1000) == 0
+    assert read_chunk(str(f), 2, 1000) == data[2000:]
+    assert scan.chunks[2].sha256 == hashlib.sha256(data[2000:]).hexdigest()
