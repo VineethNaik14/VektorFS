@@ -1,0 +1,79 @@
+# VektorFS: 1 tracker + 4 storage nodes (RF=3, so one node can die and the
+# cluster can still restore 3 copies on the 3 survivors).
+#
+#   docker compose up -d --build
+#   docker compose run --rm client status
+#   docker compose kill node2        # SIGKILL: simulate a crash
+#   docker compose start node2       # restart: re-registers, chunks kept on its volume
+x-node: &node
+  build: .
+  restart: "no"          # keep "no" so `docker compose kill` really leaves it dead
+  depends_on:
+    tracker:
+      condition: service_healthy
+
+services:
+  tracker:
+    build: .
+    command: >
+      python -m tracker.server --host 0.0.0.0 --port 9100
+      --replication-factor 3 --ttl 10 --metadata-file /data/metadata.json
+    volumes:
+      - tracker_data:/data
+    ports:
+      - "9100:9100"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 9100), 2).close()"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  node1:
+    <<: *node
+    command: >
+      python -m node.server --host 0.0.0.0 --port 9000 --storage-dir /data
+      --node-id node1 --advertise-host node1 --tracker tracker:9100
+    volumes:
+      - node1_data:/data
+
+  node2:
+    <<: *node
+    command: >
+      python -m node.server --host 0.0.0.0 --port 9000 --storage-dir /data
+      --node-id node2 --advertise-host node2 --tracker tracker:9100
+    volumes:
+      - node2_data:/data
+
+  node3:
+    <<: *node
+    command: >
+      python -m node.server --host 0.0.0.0 --port 9000 --storage-dir /data
+      --node-id node3 --advertise-host node3 --tracker tracker:9100
+    volumes:
+      - node3_data:/data
+
+  node4:
+    <<: *node
+    command: >
+      python -m node.server --host 0.0.0.0 --port 9000 --storage-dir /data
+      --node-id node4 --advertise-host node4 --tracker tracker:9100
+    volumes:
+      - node4_data:/data
+
+  # Run on demand: docker compose run --rm client upload /transfer/file.bin
+  client:
+    build: .
+    profiles: ["tools"]
+    entrypoint: ["python", "-m", "client.cli", "--tracker", "tracker:9100"]
+    volumes:
+      - ./transfer:/transfer
+    depends_on:
+      tracker:
+        condition: service_healthy
+
+volumes:
+  tracker_data:
+  node1_data:
+  node2_data:
+  node3_data:
+  node4_data:

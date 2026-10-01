@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 .pytest_cache/
-data/storage_data/
-transfer/
-*.part
+tests/
+data/
+storage_data/
+.git/
