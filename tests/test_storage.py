@@ -80,3 +80,36 @@ def test_store_and_get_binary_data(tmp_path: Path):
     storage.store("binary_chunk", data)
 
     assert storage.get("binary_chunk") == data
+
+# --- hardening added with the distributed layer ---------------------------
+
+@pytest.mark.parametrize("bad", ["a/b", "a\\b", ".hidden", "", ".", "..", "x" * 201, "a\nb", "sub/../x"])
+def test_invalid_chunk_ids_are_rejected(tmp_path: Path, bad):
+    storage = StorageManager(tmp_path / "chunks")
+    with pytest.raises(ValueError):
+        storage.store(bad, b"data")
+
+
+def test_store_is_atomic_and_leaves_no_temp_files(tmp_path: Path):
+    storage = StorageManager(tmp_path)
+    storage.store("c1", b"one")
+    storage.store("c1", b"two")                       # overwrite
+    assert storage.get("c1") == b"two"
+    assert [p.name for p in tmp_path.iterdir()] == ["c1"]
+
+
+def test_stale_temp_files_removed_on_startup_and_not_listed(tmp_path: Path):
+    (tmp_path / ".tmp-deadbeef").write_bytes(b"partial")
+    storage = StorageManager(tmp_path)
+    storage.store("c1", b"x")
+    assert storage.list_chunks() == ["c1"]
+    assert not (tmp_path / ".tmp-deadbeef").exists()
+
+
+def test_sha256_matches_content(tmp_path: Path):
+    import hashlib
+    storage = StorageManager(tmp_path)
+    storage.store("c1", b"hello")
+    assert storage.sha256("c1") == hashlib.sha256(b"hello").hexdigest()
+    with pytest.raises(FileNotFoundError):
+        storage.sha256("nope")
