@@ -7,6 +7,7 @@ dicts, so the two sides can never silently drift apart.
 
 from __future__ import annotations
 
+import re
 from enum import Enum
 from typing import Any
 
@@ -23,6 +24,29 @@ class ErrorCode(str, Enum):
     INVALID_CHUNK_ID = "INVALID_CHUNK_ID"
     CHUNK_NOT_FOUND = "CHUNK_NOT_FOUND"
     INTERNAL_ERROR = "INTERNAL_ERROR"
+    # storage-node errors added for integrity / replication
+    CHECKSUM_MISMATCH = "CHECKSUM_MISMATCH"
+    SOURCE_UNAVAILABLE = "SOURCE_UNAVAILABLE"
+    # tracker errors
+    FILE_NOT_FOUND = "FILE_NOT_FOUND"
+    FILE_EXISTS = "FILE_EXISTS"
+    NO_NODES_AVAILABLE = "NO_NODES_AVAILABLE"
+    UNKNOWN_NODE = "UNKNOWN_NODE"
+    UPLOAD_NOT_FOUND = "UPLOAD_NOT_FOUND"
+    INSUFFICIENT_REPLICAS = "INSUFFICIENT_REPLICAS"
+
+
+class RemoteError(ProtocolError):
+    """The peer answered with status=ERROR. `.code` holds the ErrorCode string.
+
+    Subclasses ProtocolError so existing `except ProtocolError` callers keep
+    working, while new callers can branch on the machine-readable code
+    instead of string-matching the message.
+    """
+
+    def __init__(self, code: str, message: str):
+        super().__init__(f"Server error [{code}]: {message}")
+        self.code = code
 
 
 # ---------------------------------------------------------------------------
@@ -30,12 +54,18 @@ class ErrorCode(str, Enum):
 # ---------------------------------------------------------------------------
 
 
-def build_store_request(chunk_id: str, data: bytes) -> dict[str, Any]:
-    return {
+def build_store_request(
+    chunk_id: str, data: bytes, sha256: str | None = None
+) -> dict[str, Any]:
+    """`sha256` (optional) lets the node verify the bytes it received."""
+    request: dict[str, Any] = {
         "command": Command.STORE.value,
         "chunk_id": chunk_id,
         "data": encode_chunk_data(data),
     }
+    if sha256 is not None:
+        request["sha256"] = sha256
+    return request
 
 
 def build_get_request(chunk_id: str) -> dict[str, Any]:
@@ -52,6 +82,19 @@ def build_exists_request(chunk_id: str) -> dict[str, Any]:
 
 def build_info_request(chunk_id: str) -> dict[str, Any]:
     return {"command": Command.INFO.value, "chunk_id": chunk_id}
+
+
+def build_replicate_request(
+    chunk_id: str, source_host: str, source_port: int, sha256: str
+) -> dict[str, Any]:
+    """Tracker -> node: fetch `chunk_id` from a peer, verify it, store it."""
+    return {
+        "command": Command.REPLICATE.value,
+        "chunk_id": chunk_id,
+        "source_host": source_host,
+        "source_port": source_port,
+        "sha256": sha256,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +120,14 @@ REQUIRED_FIELDS: dict[Command, tuple[str, ...]] = {
     Command.DELETE: ("chunk_id",),
     Command.EXISTS: ("chunk_id",),
     Command.INFO: ("chunk_id",),
+    Command.REPLICATE: ("chunk_id", "source_host", "source_port", "sha256"),
 }
+
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
+
+
+def is_sha256_hex(value: Any) -> bool:
+    return isinstance(value, str) and _SHA256_RE.fullmatch(value) is not None
 
 
 def parse_request(payload: dict[str, Any]) -> tuple[Command, dict[str, Any]]:
@@ -112,6 +162,21 @@ def parse_request(payload: dict[str, Any]) -> tuple[Command, dict[str, Any]]:
         if not isinstance(raw_data, str):
             raise ProtocolError("data must be a base64-encoded string")
         fields["data"] = decode_chunk_data(raw_data)
+        if "sha256" in payload:
+            if not is_sha256_hex(payload["sha256"]):
+                raise ProtocolError("sha256 must be 64 lowercase hex characters")
+            fields["sha256"] = payload["sha256"]
+
+    if command is Command.REPLICATE:
+        host, port = payload["source_host"], payload["source_port"]
+        if not isinstance(host, str) or not host or len(host) > 255:
+            raise ProtocolError("source_host must be a non-empty string")
+        # bool is an int subclass; reject it explicitly.
+        if not isinstance(port, int) or isinstance(port, bool) or not 0 < port < 65536:
+            raise ProtocolError("source_port must be an integer in 1..65535")
+        if not is_sha256_hex(payload["sha256"]):
+            raise ProtocolError("sha256 must be 64 lowercase hex characters")
+        fields.update(source_host=host, source_port=port, sha256=payload["sha256"])
 
     return command, fields
 
@@ -137,6 +202,6 @@ def parse_response(payload: dict[str, Any]) -> dict[str, Any]:
     if status == Status.ERROR.value:
         code = payload.get("error", ErrorCode.INTERNAL_ERROR.value)
         message = payload.get("message", "Unknown error")
-        raise ProtocolError(f"Server error [{code}]: {message}")
+        raise RemoteError(str(code), str(message))
 
     raise ProtocolError(f"Response missing valid 'status' field: {status!r}")

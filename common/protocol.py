@@ -23,6 +23,7 @@ class Command(str, Enum):
     DELETE = "DELETE"
     EXISTS = "EXISTS"
     INFO = "INFO"
+    REPLICATE = "REPLICATE"  # tracker -> node: "pull this chunk from a peer"
 
 
 class ProtocolError(Exception):
