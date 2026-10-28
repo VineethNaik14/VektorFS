@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ from common.messages import (
     RemoteError,
     build_delete_request,
     build_error_response,
+    build_info_request,
     build_ok_response,
     build_replicate_request,
 )
@@ -24,6 +26,7 @@ from common.protocol import MessageTooLargeError, ProtocolError, read_message, w
 from common.rpc import call
 from common.tracker_messages import TrackerCommand, parse_tracker_request
 from tracker.state import ClusterState, StateError
+from tracker.store import MetadataStore, JsonFileStore, open_store
 
 logger = logging.getLogger("vektorfs.tracker")
 
@@ -40,6 +43,8 @@ class TrackerServer:
         replication_factor: int = 3,
         heartbeat_ttl: float = 10.0,
         metadata_path: Path | None = None,
+        store: MetadataStore | None = None,
+        scrub_interval: float = 0.0,
         replication_interval: float = 1.0,
         max_parallel_replications: int = 4,
         node_rpc_timeout: float = 10.0,
@@ -49,7 +54,13 @@ class TrackerServer:
         self.state = ClusterState(replication_factor, heartbeat_ttl)
         # Nodes are told to heartbeat 4x per TTL: tolerates losing 3 in a row.
         self.heartbeat_interval = heartbeat_ttl / 4
-        self.metadata_path = Path(metadata_path) if metadata_path else None
+        # `store` wins; `metadata_path` is the original JSON-file shorthand.
+        if store is None and metadata_path:
+            store = JsonFileStore(metadata_path)
+        self.store = store
+        self.scrub_interval = scrub_interval      # seconds; 0 = background scrub off
+        self.scrub_stats = {"runs": 0, "checked": 0, "corrupt": 0, "missing": 0}
+        self._persist_lock = asyncio.Lock()       # one metadata write at a time, in order
         self.replication_interval = replication_interval
         self.node_rpc_timeout = node_rpc_timeout
         self.replicate_timeout = replicate_timeout
@@ -58,9 +69,9 @@ class TrackerServer:
         self._wake = asyncio.Event()
         self._tasks: set[asyncio.Task] = set()
         self._server: asyncio.AbstractServer | None = None
-        if self.metadata_path:
-            self.state.load(self.metadata_path)
-            logger.info("loaded %d files from %s", len(self.state.files), self.metadata_path)
+        if self.store:
+            self.state.load_dict({"files": self.store.load()})
+            logger.info("loaded %d files from the metadata store", len(self.state.files))
 
     @property
     def address(self) -> tuple[str, int] | None:
@@ -74,6 +85,8 @@ class TrackerServer:
         self._server = await asyncio.start_server(self._handle_connection, self.host, self.port)
         self._spawn(self._failure_detector())
         self._spawn(self._replication_loop())
+        if self.scrub_interval > 0:
+            self._spawn(self._scrub_loop())
 
     async def serve_forever(self) -> None:
         if self._server is None:
@@ -89,6 +102,8 @@ class TrackerServer:
             self._server.close()
             await self._server.wait_closed()
             self._server = None
+        if self.store:
+            self.store.close()
 
     def _spawn(self, coro) -> asyncio.Task:
         task = asyncio.create_task(coro)
@@ -96,9 +111,11 @@ class TrackerServer:
         task.add_done_callback(self._tasks.discard)
         return task
 
-    def _save(self) -> None:
-        if self.metadata_path:
-            self.state.save(self.metadata_path)
+    async def _persist(self, work) -> None:
+        """Run a blocking metadata write off-loop. The lock is FIFO, and callers
+        reach it with no await in between, so writes land in mutation order."""
+        async with self._persist_lock:
+            await asyncio.to_thread(work)
 
     # ---------------------------------------------------- background loops
 
@@ -180,6 +197,52 @@ class TrackerServer:
             self._inflight.discard(key)
             self._wake.set()       # now the node is a legal repair target again
 
+    async def _scrub_loop(self) -> None:
+        while True:
+            await asyncio.sleep(self.scrub_interval)
+            try:
+                await self.scrub_once()
+            except Exception:   # noqa: BLE001 - a scrub bug must not kill the tracker
+                logger.exception("scrub run failed")
+
+    async def scrub_once(self) -> dict[str, int]:
+        """Audit every replica against the SHA-256 recorded at upload time.
+
+        Catches silent corruption / lost files on a node's disk *before* a
+        client trips over it. A bad replica is dropped from the metadata and
+        the normal re-replication loop then heals it. Node liveness is not
+        judged here (that is the heartbeat's job): unreachable = skipped.
+        """
+        found = {"checked": 0, "corrupt": 0, "missing": 0}
+        for record in list(self.state.chunk_index.values()):
+            for node_id in sorted(record.replicas):
+                node = self.state.nodes.get(node_id)
+                if node is None or not node.alive or (record.chunk_id, node_id) in self._inflight:
+                    continue
+                try:
+                    info = await call(node.host, node.port, build_info_request(record.chunk_id),
+                                      timeout=self.node_rpc_timeout)
+                    verdict = "ok" if info.get("sha256") == record.sha256 else "corrupt"
+                except RemoteError as exc:
+                    if exc.code != ErrorCode.CHUNK_NOT_FOUND.value:
+                        continue
+                    verdict = "missing"
+                except (asyncio.TimeoutError, OSError, ProtocolError):
+                    continue
+                found["checked"] += 1
+                if verdict == "ok":
+                    continue
+                found[verdict] += 1
+                if self.state.remove_replica(record.chunk_id, node_id):
+                    logger.error("scrub: %s replica of %s on %s", verdict, record.chunk_id, node_id)
+                    if verdict == "corrupt":
+                        self._spawn(self._discard_corrupt(node_id, record.chunk_id))
+                    self._wake.set()
+        self.scrub_stats["runs"] += 1
+        for k, v in found.items():
+            self.scrub_stats[k] += v
+        return found
+
     async def _garbage_collect(self, todo) -> None:
         """Best effort: nodes that miss this get the chunk removed as an
         orphan when they next register."""
@@ -219,11 +282,8 @@ class TrackerServer:
                          "targets": [{"node_id": n, "host": s.nodes[n].host,
                                       "port": s.nodes[n].port} for n in p.assigned[cid]]}
                         for i, cid in enumerate(p.chunk_ids)])
-        if command is TrackerCommand.COMMIT:
-            record = s.commit(f["file_id"], f["sha256"], f["chunks"])
-            self._save()
-            self._wake.set()              # heal chunks stored below RF right away
-            return build_ok_response(name=record.name, chunks=len(record.chunks))
+        if command is TrackerCommand.ABORT:
+            return build_ok_response(aborted=s.abort_upload(f["file_id"]))
         if command is TrackerCommand.GET_FILE:
             r = s.get_file(f["name"])
             return build_ok_response(file={
@@ -232,11 +292,6 @@ class TrackerServer:
                 "chunks": [{"index": c.index, "chunk_id": c.chunk_id, "size": c.size,
                             "sha256": c.sha256, "replicas": self._replica_list(c)}
                            for c in r.chunks]})
-        if command is TrackerCommand.DELETE_FILE:
-            todo = s.delete_file(f["name"])
-            self._save()
-            self._spawn(self._garbage_collect(todo))
-            return build_ok_response()
         if command is TrackerCommand.LIST_FILES:
             return build_ok_response(files=[
                 {"name": r.name, "size": r.size, "chunks": len(r.chunks), "sha256": r.sha256}
@@ -251,6 +306,7 @@ class TrackerServer:
             now = s.clock()
             return build_ok_response(
                 replication_factor=s.rf, files=len(s.files), chunks=s.chunk_health(),
+                scrub=dict(self.scrub_stats),
                 nodes=[{"node_id": n.node_id, "host": n.host, "port": n.port,
                         "alive": n.alive, "chunks": len(n.chunks),
                         "last_seen_age": round(now - n.last_seen, 2)}
@@ -274,7 +330,7 @@ class TrackerServer:
                 except ProtocolError as exc:
                     await self._send(writer, build_error_response(ErrorCode.INVALID_REQUEST, str(exc)))
                     continue
-                await self._send(writer, self._dispatch(peer_ip, payload))
+                await self._send(writer, await self._dispatch(peer_ip, payload))
         finally:
             writer.close()
             try:
@@ -282,9 +338,42 @@ class TrackerServer:
             except (ConnectionError, OSError):
                 pass
 
-    def _dispatch(self, peer_ip: str, payload: dict) -> dict[str, Any]:
+    async def _commit(self, f: dict) -> dict[str, Any]:
+        s = self.state
+        record = s.commit(f["file_id"], f["sha256"], f["chunks"])
+        if self.store:
+            try:
+                await self._persist(lambda: self.store.put_file(s.file_dict(record)))
+            except Exception:   # noqa: BLE001
+                # Not durable => must not be visible. Undo, and let the chunks be GC'd.
+                logger.exception("metadata store failed; rolling back commit of %s", record.name)
+                if s.files.get(record.name) is record:
+                    self._spawn(self._garbage_collect(s.delete_file(record.name)))
+                raise StateError(ErrorCode.INTERNAL_ERROR,
+                                 "metadata store unavailable; upload not committed")
+        self._wake.set()              # heal chunks stored below RF right away
+        return build_ok_response(name=record.name, chunks=len(record.chunks))
+
+    async def _delete_file(self, f: dict) -> dict[str, Any]:
+        s = self.state
+        record = s.get_file(f["name"])            # FILE_NOT_FOUND if absent
+        if self.store:
+            # Record the intent durably FIRST: if the write fails the file is
+            # simply still there, instead of resurrecting after a restart.
+            await self._persist(lambda: self.store.delete_file(record.name))
+        if s.files.get(record.name) is record:    # not raced by another delete
+            self._spawn(self._garbage_collect(s.delete_file(record.name)))
+        return build_ok_response()
+
+    async def _dispatch(self, peer_ip: str, payload: dict) -> dict[str, Any]:
         try:
             command, fields = parse_tracker_request(payload)
+            if command is TrackerCommand.COMMIT:
+                return await self._commit(fields)
+            if command is TrackerCommand.DELETE_FILE:
+                return await self._delete_file(fields)
+            if command is TrackerCommand.SCRUB:
+                return build_ok_response(**await self.scrub_once())
             return self._handle(peer_ip, command, fields)
         except ProtocolError as exc:
             return build_error_response(ErrorCode.INVALID_REQUEST, str(exc))
@@ -308,6 +397,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--replication-factor", type=int, default=3)
     p.add_argument("--ttl", type=float, default=10.0, help="Seconds without heartbeat before a node is dead.")
     p.add_argument("--metadata-file", default=None, help="JSON file for persisted file metadata.")
+    p.add_argument("--postgres-dsn", default=os.environ.get("VEKTORFS_PG_DSN"),
+                   help="PostgreSQL DSN for metadata (default: $VEKTORFS_PG_DSN). Overrides --metadata-file.")
+    p.add_argument("--scrub-interval", type=float, default=0.0,
+                   help="Seconds between background replica integrity audits (0 = off).")
     p.add_argument("--replication-interval", type=float, default=1.0)
     return p
 
@@ -315,7 +408,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 async def _run(args) -> None:
     tracker = TrackerServer(
         args.host, args.port, replication_factor=args.replication_factor,
-        heartbeat_ttl=args.ttl, metadata_path=args.metadata_file,
+        heartbeat_ttl=args.ttl,
+        store=open_store(args.metadata_file, args.postgres_dsn),
+        scrub_interval=args.scrub_interval,
         replication_interval=args.replication_interval)
     await tracker.start()
     logger.info("VektorFS tracker listening on %s:%s (RF=%d, TTL=%.1fs)",

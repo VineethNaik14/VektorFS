@@ -21,8 +21,21 @@ def _parser() -> argparse.ArgumentParser:
     dl = sub.add_parser("download"); dl.add_argument("name"); dl.add_argument("dest")
     rm = sub.add_parser("rm"); rm.add_argument("name")
     sub.add_parser("ls")
-    sub.add_parser("status")
+    st = sub.add_parser("status"); st.add_argument("--json", action="store_true", help="raw JSON")
+    sub.add_parser("scrub")
     return p
+
+
+def format_status(st: dict) -> str:
+    c = st["chunks"]
+    lines = [f"VektorFS cluster  RF={st['replication_factor']}  files={st['files']}  "
+             f"chunks: total={c['total']} healthy={c['healthy']} "
+             f"under-replicated={c['under_replicated']} lost={c['lost']}",
+             f"{'NODE':<12}{'ADDRESS':<22}{'STATE':<7}{'CHUNKS':>7}  LAST SEEN"]
+    for n in sorted(st["nodes"], key=lambda n: n["node_id"]):
+        lines.append(f"{n['node_id']:<12}{n['host'] + ':' + str(n['port']):<22}"
+                     f"{'ALIVE' if n['alive'] else 'DEAD':<7}{n['chunks']:>7}  {n['last_seen_age']}s ago")
+    return "\n".join(lines)
 
 
 async def _main(args) -> int:
@@ -43,7 +56,11 @@ async def _main(args) -> int:
         for f in await client.list_files():
             print(f"{f['size']:>12}  {f['chunks']:>4} chunks  {f['name']}")
     elif args.cmd == "status":
-        print(json.dumps(await client.status(), indent=2))
+        st = await client.status()
+        print(json.dumps(st, indent=2) if args.json else format_status(st))
+    elif args.cmd == "scrub":
+        r = await client.scrub()
+        print(f"scrub: checked={r['checked']} corrupt={r['corrupt']} missing={r['missing']}")
     return 0
 
 

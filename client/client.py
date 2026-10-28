@@ -17,11 +17,13 @@ from typing import Any
 
 from common.chunking import CHUNK_SIZE, chunk_count, read_chunk, scan_file
 from common.hashing import sha256_bytes, sha256_file
-from common.messages import RemoteError, build_get_request, build_store_request
+from common.messages import (
+    RemoteError, build_delete_request, build_get_request, build_store_request,
+)
 from common.protocol import ProtocolError, decode_chunk_data
 from common.rpc import call
 from common.tracker_messages import (
-    build_allocate, build_commit, build_delete_file, build_get_file,
+    build_abort, build_allocate, build_commit, build_scrub, build_delete_file, build_get_file,
     build_list_files, build_report_corrupt, build_status,
 )
 
@@ -90,8 +92,12 @@ class VektorClient:
 
         sem = asyncio.Semaphore(self.concurrency)
 
+        aborted = asyncio.Event()
+
         async def upload_chunk(info, entry) -> dict:
             async with sem:   # also bounds how many chunk buffers live in RAM
+                if aborted.is_set():
+                    raise UploadError("upload aborted: another chunk failed")
                 data = await asyncio.to_thread(read_chunk, str(path), info.index, chunk_size)
                 if sha256_bytes(data) != info.sha256:
                     raise UploadError(f"{path} changed while uploading (chunk {info.index})")
@@ -104,11 +110,51 @@ class VektorClient:
                 return {"index": info.index, "size": info.size,
                         "sha256": info.sha256, "replicas": stored}
 
-        committed = await asyncio.gather(*(
-            upload_chunk(i, e) for i, e in zip(scan.chunks, plan)))
-        await self._tracker(build_commit(file_id, scan.sha256, list(committed)))
+        tasks = [asyncio.create_task(upload_chunk(i, e)) for i, e in zip(scan.chunks, plan)]
+        try:
+            committed = list(await asyncio.gather(*tasks))
+        except BaseException as exc:
+            # gather() leaves sibling tasks running when one fails. Stop NEW
+            # chunk uploads, but let STOREs already on the wire finish: cancelling
+            # one would let it land on the node after our cleanup DELETE ran and
+            # leave an orphan. (Only an explicit cancel of the whole upload
+            # cancels them; the tracker's orphan sweep covers that rare case.)
+            aborted.set()
+            if isinstance(exc, asyncio.CancelledError):
+                for t in tasks:
+                    t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            await self._cleanup_failed_upload(file_id, plan)
+            raise
+        try:
+            await self._tracker(build_commit(file_id, scan.sha256, committed))
+        except RemoteError:
+            # The tracker explicitly refused, so nothing was committed: safe to
+            # clean up. A timeout is deliberately NOT cleaned up - the commit may
+            # have succeeded, and deleting chunks of a committed file would
+            # destroy it. The tracker's orphan sweep handles that case.
+            await self._cleanup_failed_upload(file_id, plan)
+            raise
         return UploadResult(name, file_id, scan.size, scan.sha256, len(scan.chunks),
                             [len(c["replicas"]) for c in committed])
+
+    async def _cleanup_failed_upload(self, file_id: str, plan: list[dict]) -> None:
+        """Best effort: release the tracker reservation and delete stored copies."""
+        sem = asyncio.Semaphore(16)
+
+        async def drop(target: dict, chunk_id: str) -> None:
+            async with sem:
+                try:
+                    await call(target["host"], target["port"],
+                               build_delete_request(chunk_id), timeout=self.timeout)
+                except _NET_ERRORS:
+                    pass      # not stored there, or node down: orphan sweep covers it
+
+        await asyncio.gather(*(drop(t, e["chunk_id"]) for e in plan for t in e["targets"]))
+        try:
+            await self._tracker(build_abort(file_id))
+        except _NET_ERRORS:
+            pass
 
     async def _store_on(self, target: dict, chunk_id: str, data: bytes, sha: str) -> bool:
         for attempt in range(1, self.store_attempts + 1):
@@ -194,3 +240,7 @@ class VektorClient:
 
     async def status(self) -> dict:
         return await self._tracker(build_status())
+
+    async def scrub(self) -> dict:
+        """Ask the tracker to audit every replica now; returns checked/corrupt/missing."""
+        return await call(*self.tracker, build_scrub(), timeout=max(self.timeout, 120.0))

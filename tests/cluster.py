@@ -52,10 +52,12 @@ class Cluster:
         self.metadata_path = tmp / "tracker.json" if metadata else None
         self.tracker: TrackerServer | None = None
         self.nodes: list[TestNode] = []
+        self.store_factory = None   # optional: build a fresh metadata store per tracker
 
     def _new_tracker(self, port: int = 0) -> TrackerServer:
         return TrackerServer("127.0.0.1", port, replication_factor=self.rf,
                              heartbeat_ttl=self.ttl, metadata_path=self.metadata_path,
+                             store=self.store_factory() if self.store_factory else None,
                              replication_interval=0.1)
 
     async def start(self) -> "Cluster":
