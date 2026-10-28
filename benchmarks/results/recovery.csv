@@ -1,0 +1,5 @@
+trial,victim,ttl_s,download_during_outage_ok,download_during_outage_s,detect_s,fully_rereplicated_s
+1,node1,3.0,True,5.04,3.42,3.99
+2,node2,3.0,True,4.87,2.79,3.42
+3,node3,3.0,True,4.7,2.74,3.25
+4,node4,3.0,True,4.62,2.83,3.32

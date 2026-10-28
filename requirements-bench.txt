@@ -1,0 +1,4 @@
+-r requirements.txt
+-r requirements-postgres.txt
+pandas==3.0.2
+matplotlib==3.10.8

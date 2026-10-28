@@ -1,4 +1,4 @@
-# VektorFS: 1 tracker + 4 storage nodes (RF=3, so one node can die and the
+# VektorFS: PostgreSQL + 1 tracker + 4 storage nodes (RF=3, so one node can die and the
 # cluster can still restore 3 copies on the 3 survivors).
 #
 #   docker compose up -d --build
@@ -13,13 +13,31 @@ x-node: &node
       condition: service_healthy
 
 services:
+  # File metadata lives in PostgreSQL (survives tracker restarts/rebuilds).
+  # Demo credentials only: change them for anything beyond a local demo.
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: vektor
+      POSTGRES_PASSWORD: vektor
+      POSTGRES_DB: vektorfs
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vektor -d vektorfs"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+
   tracker:
     build: .
     command: >
       python -m tracker.server --host 0.0.0.0 --port 9100
-      --replication-factor 3 --ttl 10 --metadata-file /data/metadata.json
-    volumes:
-      - tracker_data:/data
+      --replication-factor 3 --ttl 10 --scrub-interval 60
+      --postgres-dsn postgresql://vektor:vektor@postgres:5432/vektorfs
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "9100:9100"
     healthcheck:
@@ -72,7 +90,7 @@ services:
         condition: service_healthy
 
 volumes:
-  tracker_data:
+  pg_data:
   node1_data:
   node2_data:
   node3_data:

@@ -3,7 +3,10 @@ FROM python:3.12-slim
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 WORKDIR /app
 
-# The runtime is pure standard library: nothing to pip install.
+# The core is pure standard library. Only the tracker's optional PostgreSQL
+# metadata store needs a driver.
+COPY requirements-postgres.txt .
+RUN pip install --no-cache-dir -r requirements-postgres.txt
 COPY common/ common/
 COPY node/ node/
 COPY tracker/ tracker/

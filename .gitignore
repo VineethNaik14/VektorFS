@@ -2,6 +2,8 @@
 __pycache__/
 *.pyc
 .pytest_cache/
-data/storage_data/
+data/
+storage_data/
 transfer/
 *.part
+benchmarks/results/*.tmp

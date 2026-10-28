@@ -1,0 +1,11 @@
+config,node,chunks,cv
+"4 nodes, RF=3",node1,102,0.0
+"4 nodes, RF=3",node2,102,0.0
+"4 nodes, RF=3",node3,102,0.0
+"4 nodes, RF=3",node4,102,0.0
+"6 nodes, RF=2",node1,45,0.0104
+"6 nodes, RF=2",node2,46,0.0104
+"6 nodes, RF=2",node3,45,0.0104
+"6 nodes, RF=2",node4,45,0.0104
+"6 nodes, RF=2",node5,45,0.0104
+"6 nodes, RF=2",node6,46,0.0104
