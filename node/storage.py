@@ -1,6 +1,7 @@
 import hashlib
 import os
 import re
+import time
 import uuid
 from pathlib import Path
 
@@ -9,6 +10,24 @@ from pathlib import Path
 # line of defence; the resolve() check below stays as defence in depth.
 _CHUNK_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}")
 _TMP_PREFIX = ".tmp-"
+
+# Windows refuses to delete/replace a file another handle has open (WinError 32,
+# "sharing violation"); POSIX allows it. A concurrent read of the same chunk (e.g.
+# a peer pulling it for re-replication) is short, so retrying briefly is correct.
+_SHARING_VIOLATION = 32
+_LOCK_RETRIES = 20
+_LOCK_RETRY_DELAY = 0.05
+
+
+def _retry_if_in_use(operation):
+    for attempt in range(_LOCK_RETRIES):
+        try:
+            return operation()
+        except PermissionError as exc:
+            # Only the "file is in use" case is transient; real permission errors are not.
+            if getattr(exc, "winerror", None) != _SHARING_VIOLATION or attempt == _LOCK_RETRIES - 1:
+                raise
+            time.sleep(_LOCK_RETRY_DELAY)
 
 
 class StorageManager:
@@ -47,7 +66,7 @@ class StorageManager:
                 file.write(data)
                 file.flush()
                 os.fsync(file.fileno())
-            os.replace(tmp_path, chunk_path)
+            _retry_if_in_use(lambda: os.replace(tmp_path, chunk_path))
         finally:
             tmp_path.unlink(missing_ok=True)
 
@@ -69,7 +88,7 @@ class StorageManager:
         if not chunk_path.is_file():
             raise FileNotFoundError(f"Chunk not found: {chunk_id}")
 
-        chunk_path.unlink()
+        _retry_if_in_use(chunk_path.unlink)
 
     def info(self, chunk_id: str) -> dict:
         chunk_path = self._get_chunk_path(chunk_id)

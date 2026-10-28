@@ -1,0 +1,4 @@
+scenario,corrupt_replicas,download_ok,corrupt_skipped,detail
+scrubber: 1 corrupt replica in every chunk,16,True,0,all detected; back to RF=3 in 0.6s
+client read: 1 corrupt replica in every chunk,16,True,5,served from good replicas; bad ones reported
+all replicas of one chunk corrupt,3,True,0,"refused: no valid replica (download failed, no output file)"

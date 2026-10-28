@@ -253,6 +253,11 @@ class ClusterState:
         del self.pending[file_id]
         return record
 
+    def abort_upload(self, file_id: str) -> bool:
+        """Drop a reservation whose upload failed, so its phantom chunks stop
+        counting towards node load. False if it was unknown/already expired."""
+        return self.pending.pop(file_id, None) is not None
+
     def get_file(self, name: str) -> FileRecord:
         record = self.files.get(name)
         if record is None:
@@ -337,13 +342,16 @@ class ClusterState:
 
     # ----------------------------------------------------------- persistence
 
+    @staticmethod
+    def file_dict(f: FileRecord) -> dict:
+        """One file as a plain dict (the unit the metadata stores persist)."""
+        return {"name": f.name, "file_id": f.file_id, "size": f.size,
+                "chunk_size": f.chunk_size, "sha256": f.sha256,
+                "chunks": [{"chunk_id": c.chunk_id, "index": c.index,
+                            "size": c.size, "sha256": c.sha256} for c in f.chunks]}
+
     def to_dict(self) -> dict:
-        return {"files": [
-            {"name": f.name, "file_id": f.file_id, "size": f.size,
-             "chunk_size": f.chunk_size, "sha256": f.sha256,
-             "chunks": [{"chunk_id": c.chunk_id, "index": c.index,
-                         "size": c.size, "sha256": c.sha256} for c in f.chunks]}
-            for f in self.files.values()]}
+        return {"files": [self.file_dict(f) for f in self.files.values()]}
 
     def load_dict(self, data: dict) -> None:
         for f in data.get("files", []):

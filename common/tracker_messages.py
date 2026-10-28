@@ -36,6 +36,8 @@ class TrackerCommand(str, Enum):
     LIST_FILES = "LIST_FILES"
     REPORT_CORRUPT = "REPORT_CORRUPT"
     STATUS = "STATUS"
+    ABORT = "ABORT"
+    SCRUB = "SCRUB"
 
 
 # ---------------------------------------------------------------- builders
@@ -77,6 +79,14 @@ def build_report_corrupt(chunk_id: str, node_id: str) -> dict:
 
 def build_status() -> dict:
     return {"command": "STATUS"}
+
+
+def build_abort(file_id: str) -> dict:
+    return {"command": "ABORT", "file_id": file_id}
+
+
+def build_scrub() -> dict:
+    return {"command": "SCRUB"}
 
 
 # ---------------------------------------------------------------- validators
@@ -170,6 +180,9 @@ def parse_tracker_request(payload: dict[str, Any]) -> tuple[TrackerCommand, dict
 
     elif command in (TrackerCommand.GET_FILE, TrackerCommand.DELETE_FILE):
         f["name"] = _name(payload)
+
+    elif command is TrackerCommand.ABORT:
+        f["file_id"] = _pattern(payload, "file_id", _FILE_ID_RE)
 
     elif command is TrackerCommand.REPORT_CORRUPT:
         f["chunk_id"] = _pattern(payload, "chunk_id", _CHUNK_ID_RE)
