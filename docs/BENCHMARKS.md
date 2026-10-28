@@ -4,7 +4,7 @@ Reproduce: `python -m benchmarks.bench all` then `python -m benchmarks.plot`
 (raw CSVs and PNGs are in `benchmarks/results/`).
 
 **Test bed:** Windows, Python 3.12.6, loopback TCP, 1 tracker + 4 storage-node
-*processes* plus the client on one machine. Hardware: **<CPU model, cores, RAM, SSD/HDD - fill in>**.
+*processes* plus the client on one machine. Hardware: **<Intel Core i5-12450H, 8 cores, 16GB, 512GB NVMe SSD>**.
 Everything shares one machine and a loopback network, so absolute MiB/s numbers show
 how the *software* behaves, not what a real multi-host network would deliver.
 
