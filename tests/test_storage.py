@@ -81,7 +81,6 @@ def test_store_and_get_binary_data(tmp_path: Path):
 
     assert storage.get("binary_chunk") == data
 
-# --- hardening added with the distributed layer ---------------------------
 
 @pytest.mark.parametrize("bad", ["a/b", "a\\b", ".hidden", "", ".", "..", "x" * 201, "a\nb", "sub/../x"])
 def test_invalid_chunk_ids_are_rejected(tmp_path: Path, bad):
@@ -93,7 +92,7 @@ def test_invalid_chunk_ids_are_rejected(tmp_path: Path, bad):
 def test_store_is_atomic_and_leaves_no_temp_files(tmp_path: Path):
     storage = StorageManager(tmp_path)
     storage.store("c1", b"one")
-    storage.store("c1", b"two")                       # overwrite
+    storage.store("c1", b"two")                    
     assert storage.get("c1") == b"two"
     assert [p.name for p in tmp_path.iterdir()] == ["c1"]
 

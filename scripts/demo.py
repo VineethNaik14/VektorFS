@@ -1,11 +1,3 @@
-"""Guided live demo of VektorFS fault tolerance (real processes, ~1 minute).
-
-    python scripts/demo.py            # from the repository root
-
-Shows: upload -> chunk placement -> kill a node -> reads still work ->
-automatic re-replication -> silent corruption -> scrub heals it -> delete.
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -16,9 +8,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from benchmarks.harness import ProcessCluster          # noqa: E402
-from client.cli import format_status                    # noqa: E402
-from common.hashing import sha256_file                  # noqa: E402
+from benchmarks.harness import ProcessCluster        
+from client.cli import format_status                   
+from common.hashing import sha256_file                  
 
 MIB = 1024 * 1024
 

@@ -11,7 +11,7 @@ DSN = os.environ.get("VEKTORFS_TEST_PG_DSN")
 pytestmark = [pytest.mark.postgres,
               pytest.mark.skipif(not DSN, reason="VEKTORFS_TEST_PG_DSN not set")]
 
-from tests.cluster import Cluster          # noqa: E402
+from tests.cluster import Cluster        
 
 
 def _record(name="a.bin", n=3):
@@ -49,7 +49,7 @@ def test_put_replaces_and_delete_cascades(store):
 
 def test_reconnects_after_connection_drop(store):
     store.put_file(_record("a"))
-    store._conn.close()                      # simulate a dropped link
+    store._conn.close()                     
     assert len(store.load()) == 1
 
 

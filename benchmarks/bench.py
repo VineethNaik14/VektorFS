@@ -1,10 +1,3 @@
-"""VektorFS benchmarks (real processes over loopback TCP).
-
-  python -m benchmarks.bench throughput|distribution|recovery|integrity|all [--quick]
-
-Writes CSVs to benchmarks/results/. Charts: python -m benchmarks.plot
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -46,7 +39,7 @@ async def healthy(cluster: ProcessCluster) -> bool:
     return c["total"] > 0 and c["under_replicated"] == 0 and c["lost"] == 0
 
 
-# --------------------------------------------------------------- 1. throughput
+# Throughput
 async def throughput(quick: bool) -> None:
     size = (16 if quick else 64) * MIB
     reps = 2 if quick else 3
@@ -81,7 +74,7 @@ async def throughput(quick: bool) -> None:
     write_csv("throughput", rows)
 
 
-# ------------------------------------------------------------- 2. distribution
+# Distribution
 async def distribution(quick: bool) -> None:
     rows = []
     n_files = 12 if quick else 40
@@ -106,7 +99,7 @@ async def distribution(quick: bool) -> None:
     write_csv("distribution", rows)
 
 
-# ------------------------------------------------------------------ 3. recovery
+# Recovery
 async def recovery(quick: bool) -> None:
     rows, ttl = [], 3.0
     trials = 2 if quick else 4
@@ -140,7 +133,6 @@ async def recovery(quick: bool) -> None:
                         await asyncio.sleep(0.05)
 
                 watcher = asyncio.create_task(watch())
-                # Availability DURING the outage: read straight away, before detection.
                 out = Path(tmp) / "during.bin"
                 t0 = time.perf_counter()
                 res = await client.download("big", out)
@@ -156,7 +148,7 @@ async def recovery(quick: bool) -> None:
     write_csv("recovery", rows)
 
 
-# ------------------------------------------------------------------ 4. integrity
+# Integrity
 async def integrity(quick: bool) -> None:
     rows = []
     with tempfile.TemporaryDirectory() as tmp:
@@ -167,18 +159,16 @@ async def integrity(quick: bool) -> None:
             client = cluster.client(concurrency=4, timeout=30)
             await client.upload(src, "f", chunk_size=MIB)
             meta = (await client.status())
-            chunk_files = {}                       # chunk_id -> [paths of replicas on disk]
+            chunk_files = {}                      
             for node_id in cluster.node_ports:
                 for p in cluster.node_dir(node_id).iterdir():
                     if not p.name.startswith("."):
                         chunk_files.setdefault(p.name, []).append(p)
 
             def corrupt(path: Path) -> None:
-                raw = bytearray(path.read_bytes()); raw[len(raw) // 2] = (raw[len(raw) // 2] + 1) % 256   # never self-reverts
+                raw = bytearray(path.read_bytes()); raw[len(raw) // 2] = (raw[len(raw) // 2] + 1) % 256  
                 path.write_bytes(bytes(raw))
 
-            # A) SCRUB path: silent bit-rot, no client involved. The tracker audits
-            #    replicas against recorded SHA-256s and re-replicates good copies.
             for paths in chunk_files.values():
                 corrupt(paths[0])
             t0 = time.perf_counter()
@@ -187,8 +177,7 @@ async def integrity(quick: bool) -> None:
             rows.append(dict(scenario="scrubber: 1 corrupt replica in every chunk",
                              corrupt_replicas=found["corrupt"], download_ok=True, corrupt_skipped=0,
                              detail=f"all detected; back to RF=3 in {time.perf_counter() - t0:.1f}s"))
-            # B) READ path: corruption nobody has scrubbed yet. The client verifies
-            #    every chunk, skips the bad replica and reports it.
+
             for paths in chunk_files.values():
                 corrupt(next(q for q in paths if q.exists()))
             res = await client.download("f", Path(tmp) / "a.out")
@@ -197,7 +186,7 @@ async def integrity(quick: bool) -> None:
                              corrupt_skipped=res.corrupt_replicas_skipped,
                              detail="served from good replicas; bad ones reported"))
             await cluster.wait_for(lambda: healthy(cluster), 60, "heal after reported corruption")
-            # C) ALL replicas of one chunk corrupt -> must FAIL LOUDLY, never return bad data.
+
             victim_chunk, paths = next(iter(chunk_files.items()))
             for node_id in cluster.node_ports:
                 pth = cluster.node_dir(node_id) / victim_chunk

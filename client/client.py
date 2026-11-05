@@ -1,10 +1,3 @@
-"""VektorFS client: chunk, hash, upload, download, verify.
-
-Integrity is end-to-end: the client computes SHA-256s from the source file
-and checks every downloaded chunk (and the reassembled file) against the
-hashes the tracker recorded. It never trusts a storage node's word.
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -78,13 +71,11 @@ class VektorClient:
     async def _tracker(self, payload: dict) -> dict[str, Any]:
         return await call(*self.tracker, payload, timeout=self.timeout)
 
-    # --------------------------------------------------------------- upload
 
     async def upload(self, path: str | Path, name: str | None = None,
                      chunk_size: int = CHUNK_SIZE) -> UploadResult:
         path = Path(path)
         name = name or path.name
-        # Pass 1: whole-file + per-chunk hashes (bounded memory, off the loop).
         scan = await asyncio.to_thread(scan_file, str(path), chunk_size)
         alloc = await self._tracker(
             build_allocate(name, scan.size, chunk_size, len(scan.chunks)))
@@ -95,7 +86,7 @@ class VektorClient:
         aborted = asyncio.Event()
 
         async def upload_chunk(info, entry) -> dict:
-            async with sem:   # also bounds how many chunk buffers live in RAM
+            async with sem:   
                 if aborted.is_set():
                     raise UploadError("upload aborted: another chunk failed")
                 data = await asyncio.to_thread(read_chunk, str(path), info.index, chunk_size)
@@ -114,11 +105,6 @@ class VektorClient:
         try:
             committed = list(await asyncio.gather(*tasks))
         except BaseException as exc:
-            # gather() leaves sibling tasks running when one fails. Stop NEW
-            # chunk uploads, but let STOREs already on the wire finish: cancelling
-            # one would let it land on the node after our cleanup DELETE ran and
-            # leave an orphan. (Only an explicit cancel of the whole upload
-            # cancels them; the tracker's orphan sweep covers that rare case.)
             aborted.set()
             if isinstance(exc, asyncio.CancelledError):
                 for t in tasks:
@@ -129,17 +115,12 @@ class VektorClient:
         try:
             await self._tracker(build_commit(file_id, scan.sha256, committed))
         except RemoteError:
-            # The tracker explicitly refused, so nothing was committed: safe to
-            # clean up. A timeout is deliberately NOT cleaned up - the commit may
-            # have succeeded, and deleting chunks of a committed file would
-            # destroy it. The tracker's orphan sweep handles that case.
             await self._cleanup_failed_upload(file_id, plan)
             raise
         return UploadResult(name, file_id, scan.size, scan.sha256, len(scan.chunks),
                             [len(c["replicas"]) for c in committed])
 
     async def _cleanup_failed_upload(self, file_id: str, plan: list[dict]) -> None:
-        """Best effort: release the tracker reservation and delete stored copies."""
         sem = asyncio.Semaphore(16)
 
         async def drop(target: dict, chunk_id: str) -> None:
@@ -148,7 +129,7 @@ class VektorClient:
                     await call(target["host"], target["port"],
                                build_delete_request(chunk_id), timeout=self.timeout)
                 except _NET_ERRORS:
-                    pass      # not stored there, or node down: orphan sweep covers it
+                    pass     
 
         await asyncio.gather(*(drop(t, e["chunk_id"]) for e in plan for t in e["targets"]))
         try:
@@ -165,9 +146,7 @@ class VektorClient:
             except _NET_ERRORS as exc:
                 logger.warning("store %s on %s failed (attempt %d): %r",
                                chunk_id, target["node_id"], attempt, exc)
-        return False   # tracker's re-replication will make up the missing copy
-
-    # ------------------------------------------------------------- download
+        return False  
 
     async def download(self, name: str, dest: str | Path) -> DownloadResult:
         dest = Path(dest)
@@ -182,7 +161,7 @@ class VektorClient:
                     async with sem:
                         data = await self._fetch_chunk(name, chunk, skipped)
                         out.seek(chunk["index"] * meta["chunk_size"])
-                        out.write(data)   # no await between seek and write: atomic
+                        out.write(data)  
                 await asyncio.gather(*(fetch(c) for c in meta["chunks"]))
                 out.flush()
                 os.fsync(out.fileno())
@@ -194,15 +173,14 @@ class VektorClient:
                     f"whole-file SHA-256 mismatch: expected {meta['sha256']}, got {digest}")
             os.replace(part, dest)
         except BaseException:
-            part.unlink(missing_ok=True)   # never leave a half-written file behind
+            part.unlink(missing_ok=True)   
             raise
         return DownloadResult(dest, meta["size"], digest, len(meta["chunks"]), skipped[0])
 
     async def _fetch_chunk(self, name: str, chunk: dict, skipped: list[int]) -> bytes:
-        """Try every replica; on a stale replica list, ask the tracker again."""
         replicas = chunk["replicas"]
         for round_no in range(3):
-            candidates = random.sample(replicas, len(replicas))  # spread read load
+            candidates = random.sample(replicas, len(replicas)) 
             for node in candidates:
                 try:
                     resp = await call(node["host"], node["port"],
@@ -218,19 +196,15 @@ class VektorClient:
                 skipped[0] += 1
                 logger.error("CORRUPT chunk %d on %s; trying next replica",
                              chunk["index"], node["node_id"])
-                try:   # best effort: lets the tracker schedule a repair
+                try:   
                     await self._tracker(build_report_corrupt(chunk["chunk_id"], node["node_id"]))
                 except _NET_ERRORS:
                     pass
             if round_no < 2:
-                # All known replicas failed. The list may be stale (a node just
-                # died / a repair just finished): refresh it and retry.
                 await asyncio.sleep(0.5 * (round_no + 1))
                 fresh = (await self._tracker(build_get_file(name)))["file"]["chunks"]
                 replicas = fresh[chunk["index"]]["replicas"]
         raise DownloadError(f"chunk {chunk['index']} unavailable on every replica")
-
-    # ----------------------------------------------------------- management
 
     async def delete(self, name: str) -> None:
         await self._tracker(build_delete_file(name))
@@ -242,5 +216,4 @@ class VektorClient:
         return await self._tracker(build_status())
 
     async def scrub(self) -> dict:
-        """Ask the tracker to audit every replica now; returns checked/corrupt/missing."""
         return await call(*self.tracker, build_scrub(), timeout=max(self.timeout, 120.0))

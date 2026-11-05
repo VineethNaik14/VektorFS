@@ -20,7 +20,6 @@ def _chunk_ids(file_meta):
     return [c["chunk_id"] for c in file_meta["chunks"]]
 
 
-# ---------------------------------------------------------------- metadata dir
 
 @pytest.mark.asyncio
 async def test_metadata_file_in_missing_directory_is_created(tmp_path, sample_file):
@@ -30,7 +29,7 @@ async def test_metadata_file_in_missing_directory_is_created(tmp_path, sample_fi
     c.metadata_path = meta
     await c.start()
     try:
-        await c.client().upload(sample_file, chunk_size=CHUNK)   # used to be INTERNAL_ERROR
+        await c.client().upload(sample_file, chunk_size=CHUNK)   
         assert meta.is_file()
     finally:
         await c.stop()
@@ -40,7 +39,7 @@ def test_unwritable_metadata_path_fails_at_startup(tmp_path):
     blocker = tmp_path / "file"
     blocker.write_text("x")
     with pytest.raises(OSError):
-        JsonFileStore(blocker / "meta.json")      # parent is a file: fail fast, not on first upload
+        JsonFileStore(blocker / "meta.json")     
 
 
 def test_json_store_keeps_old_state_if_write_fails(tmp_path, monkeypatch):
@@ -63,8 +62,8 @@ async def test_commit_is_rolled_back_when_store_fails(tmp_path, sample_file):
         with pytest.raises(RemoteError) as e:
             await c.client().upload(sample_file, chunk_size=CHUNK)
         assert e.value.code == "INTERNAL_ERROR"
-        assert await c.client().list_files() == []          # not visible if not durable
-        await c.wait_for(lambda: all(not n.storage.list_chunks() for n in c.nodes))   # GC'd
+        assert await c.client().list_files() == []        
+        await c.wait_for(lambda: all(not n.storage.list_chunks() for n in c.nodes))  
     finally:
         await c.stop()
 
@@ -82,8 +81,6 @@ async def test_delete_survives_tracker_restart(tmp_path, sample_file):
         await c.stop()
 
 
-# ------------------------------------------------------- failed-upload cleanup
-
 async def _two_node_rf1(tmp_path):
     tr = TrackerServer("127.0.0.1", 0, replication_factor=1, heartbeat_ttl=30)
     await tr.start()
@@ -99,13 +96,13 @@ async def _two_node_rf1(tmp_path):
 async def test_failed_upload_leaves_no_orphans_and_no_reservation(tmp_path, sample_file):
     tr, nodes = await _two_node_rf1(tmp_path)
     try:
-        await nodes[1].kill()          # tracker still believes it is alive
+        await nodes[1].kill()         
         from client.client import VektorClient
         client = VektorClient(*tr.address, timeout=2, store_attempts=1)
         with pytest.raises(UploadError):
             await client.upload(sample_file, chunk_size=CHUNK)
-        assert nodes[0].storage.list_chunks() == []      # copies that landed were removed
-        assert tr.state.pending == {}                    # reservation released
+        assert nodes[0].storage.list_chunks() == []     
+        assert tr.state.pending == {}                    
     finally:
         await nodes[0].kill()
         await tr.stop()
@@ -124,7 +121,6 @@ async def test_abort_command_is_idempotent(tmp_path):
         await tr.stop()
 
 
-# ------------------------------------------------------------------- scrubber
 
 @pytest.mark.asyncio
 async def test_scrub_detects_and_heals_silent_corruption(cluster, sample_file):
@@ -138,7 +134,6 @@ async def test_scrub_detects_and_heals_silent_corruption(cluster, sample_file):
     result = await client.scrub()
     assert result["corrupt"] == 1 and result["missing"] == 0
     cid = _chunk_ids(meta)[0]
-    # Healed back to RF=3 with only good copies.
     await cluster.wait_for(lambda: len(cluster.tracker.state.chunk_index[cid].replicas) == 3)
     assert all(h.storage.sha256(cid) == meta["chunks"][0]["sha256"] for h in cluster.holders(cid))
     assert (await client.scrub())["corrupt"] == 0

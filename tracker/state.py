@@ -1,16 +1,3 @@
-"""Tracker metadata + cluster membership. Pure logic: no sockets, no sleeps.
-
-Every method is synchronous and never awaits, so when called from the
-asyncio event loop each one is atomic with respect to other requests. That
-is what lets the tracker avoid locks entirely.
-
-Source of truth split (a deliberate design decision):
-  * FILES -> chunks (id, index, size, sha256) are persisted to disk.
-  * REPLICA LOCATIONS are NOT persisted. They are rebuilt from the chunk
-    report each node sends when it registers. Nodes know what is actually on
-    their disks; a persisted location list could only ever be stale.
-"""
-
 from __future__ import annotations
 
 import json
@@ -49,7 +36,7 @@ class ChunkRecord:
     index: int
     size: int
     sha256: str
-    replicas: set[str] = field(default_factory=set)  # node_ids believed alive+holding
+    replicas: set[str] = field(default_factory=set) 
 
 
 @dataclass
@@ -69,7 +56,7 @@ class PendingUpload:
     size: int
     chunk_size: int
     chunk_ids: list[str]
-    assigned: dict[str, list[str]]  # chunk_id -> node_ids chosen by ALLOCATE
+    assigned: dict[str, list[str]]  
     expires_at: float
 
 
@@ -98,7 +85,6 @@ class ClusterState:
         self.chunk_index: dict[str, ChunkRecord] = {}
         self.pending: dict[str, PendingUpload] = {}
 
-    # ------------------------------------------------------------ membership
 
     def alive_nodes(self) -> list[NodeInfo]:
         return [n for n in self.nodes.values() if n.alive]
@@ -106,13 +92,6 @@ class ClusterState:
     def register_node(
         self, node_id: str, host: str, port: int, chunk_ids: list[str]
     ) -> list[str]:
-        """(Re-)register a node. Returns orphan chunk ids it should delete.
-
-        The report is authoritative: first forget everything we thought the
-        node held, then re-add only what it says it has. That correctly
-        handles a restart, a wiped disk, and a node returning after being
-        declared dead.
-        """
         self._expire_pending()
         node = self.nodes.get(node_id)
         if node is None:
@@ -132,12 +111,10 @@ class ClusterState:
                 record.replicas.add(node_id)
                 node.chunks.add(chunk_id)
             elif chunk_id not in pending_ids:
-                # Deleted while the node was away (or an abandoned upload).
                 orphans.append(chunk_id)
         return orphans
 
     def heartbeat(self, node_id: str) -> bool:
-        """False => node unknown or already declared dead: it must re-register."""
         node = self.nodes.get(node_id)
         if node is None or not node.alive:
             return False
@@ -145,7 +122,6 @@ class ClusterState:
         return True
 
     def expire_dead_nodes(self) -> list[str]:
-        """TTL failure detector: mark silent nodes dead, drop their replicas."""
         now = self.clock()
         dead = []
         for node in self.nodes.values():
@@ -167,7 +143,6 @@ class ClusterState:
         for fid in [f for f, p in self.pending.items() if p.expires_at < now]:
             del self.pending[fid]
 
-    # ------------------------------------------------------------- placement
 
     def _load_map(self) -> Counter:
         load: Counter = Counter()
@@ -178,7 +153,6 @@ class ClusterState:
                 load.update(node_ids)
         return load
 
-    # --------------------------------------------------------------- uploads
 
     def allocate(
         self, name: str, size: int, chunk_size: int, num_chunks: int
@@ -200,7 +174,6 @@ class ClusterState:
         chunk_ids, assigned = [], {}
         for index in range(num_chunks):
             chunk_id = f"{file_id}_{index:06d}"
-            # Least-loaded first; random tie-break spreads equal nodes evenly.
             ranked = sorted(alive, key=lambda n: (load[n.node_id], random.random()))
             chosen = [n.node_id for n in ranked[:want]]
             load.update(chosen)
@@ -242,7 +215,6 @@ class ClusterState:
                 pending.chunk_ids[item["index"]], item["index"], item["size"],
                 item["sha256"], set(live),
             ))
-        # Validation done: only now mutate, so a rejected commit leaves no trace.
         record = FileRecord(pending.name, file_id, pending.size, pending.chunk_size,
                             sha256, records)
         self.files[pending.name] = record
@@ -254,8 +226,6 @@ class ClusterState:
         return record
 
     def abort_upload(self, file_id: str) -> bool:
-        """Drop a reservation whose upload failed, so its phantom chunks stop
-        counting towards node load. False if it was unknown/already expired."""
         return self.pending.pop(file_id, None) is not None
 
     def get_file(self, name: str) -> FileRecord:
@@ -277,10 +247,8 @@ class ClusterState:
         del self.files[name]
         return todo
 
-    # ------------------------------------------------------ repair / healing
 
     def remove_replica(self, chunk_id: str, node_id: str) -> bool:
-        """Forget a replica (reported corrupt). Re-replication will heal it."""
         record = self.chunk_index.get(chunk_id)
         if record is None or node_id not in record.replicas:
             return False
@@ -291,21 +259,19 @@ class ClusterState:
 
     def add_replica(self, chunk_id: str, node_id: str) -> None:
         record, node = self.chunk_index.get(chunk_id), self.nodes.get(node_id)
-        if record and node and node.alive:  # chunk may be deleted / node died meanwhile
+        if record and node and node.alive:  
             record.replicas.add(node_id)
             node.chunks.add(chunk_id)
 
     def plan_replication(
         self, inflight: set[tuple[str, str]], max_tasks: int = 16
     ) -> list[ReplicationTask]:
-        """Copy under-replicated chunks, most endangered first."""
         alive = {n.node_id: n for n in self.alive_nodes()}
         if not alive:
             return []
         want = min(self.rf, len(alive))
         load = self._load_map()
         tasks: list[ReplicationTask] = []
-        # 0 replicas = unrecoverable until a holder returns: skip, nothing to copy from.
         candidates = sorted(
             (c for c in self.chunk_index.values() if 0 < len(c.replicas) < want),
             key=lambda c: len(c.replicas),
@@ -340,11 +306,9 @@ class ClusterState:
             counts["lost" if n == 0 else "healthy" if n >= want else "under_replicated"] += 1
         return counts
 
-    # ----------------------------------------------------------- persistence
 
     @staticmethod
     def file_dict(f: FileRecord) -> dict:
-        """One file as a plain dict (the unit the metadata stores persist)."""
         return {"name": f.name, "file_id": f.file_id, "size": f.size,
                 "chunk_size": f.chunk_size, "sha256": f.sha256,
                 "chunks": [{"chunk_id": c.chunk_id, "index": c.index,
@@ -363,7 +327,6 @@ class ClusterState:
                 self.chunk_index[c.chunk_id] = c
 
     def save(self, path: Path) -> None:
-        """Atomic snapshot: a crash mid-save keeps the previous good file."""
         tmp = path.with_name(path.name + ".tmp")
         with tmp.open("w", encoding="utf-8") as fh:
             json.dump(self.to_dict(), fh)

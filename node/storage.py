@@ -5,15 +5,9 @@ import time
 import uuid
 from pathlib import Path
 
-# Chunk ids are flat file names: no separators, no leading dot (so they can
-# never collide with our ".tmp-*" files), bounded length. This is the first
-# line of defence; the resolve() check below stays as defence in depth.
 _CHUNK_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}")
 _TMP_PREFIX = ".tmp-"
 
-# Windows refuses to delete/replace a file another handle has open (WinError 32,
-# "sharing violation"); POSIX allows it. A concurrent read of the same chunk (e.g.
-# a peer pulling it for re-replication) is short, so retrying briefly is correct.
 _SHARING_VIOLATION = 32
 _LOCK_RETRIES = 20
 _LOCK_RETRY_DELAY = 0.05
@@ -24,7 +18,6 @@ def _retry_if_in_use(operation):
         try:
             return operation()
         except PermissionError as exc:
-            # Only the "file is in use" case is transient; real permission errors are not.
             if getattr(exc, "winerror", None) != _SHARING_VIOLATION or attempt == _LOCK_RETRIES - 1:
                 raise
             time.sleep(_LOCK_RETRY_DELAY)
@@ -35,8 +28,6 @@ class StorageManager:
     def __init__(self, storage_path: Path):
         self.storage_path = Path(storage_path)
         self.storage_path.mkdir(parents=True, exist_ok=True)
-        # A crash between "write temp" and "rename" leaves a temp file behind.
-        # It was never a valid chunk, so it is safe to discard on startup.
         for leftover in self.storage_path.glob(f"{_TMP_PREFIX}*"):
             leftover.unlink(missing_ok=True)
 
@@ -53,12 +44,6 @@ class StorageManager:
         return chunk_path
 
     def store(self, chunk_id: str, data: bytes) -> None:
-        """Atomically write a chunk.
-
-        Write to a temp file, fsync, then os.replace(). Readers (and a
-        restart after a crash) see either the complete old chunk or the
-        complete new one, never a truncated file that would look valid.
-        """
         chunk_path = self._get_chunk_path(chunk_id)
         tmp_path = self.storage_path / f"{_TMP_PREFIX}{uuid.uuid4().hex}"
         try:
@@ -100,7 +85,6 @@ class StorageManager:
         return {"chunk_id": chunk_id, "size": stat.st_size}
 
     def sha256(self, chunk_id: str) -> str:
-        """SHA-256 of the bytes currently on disk (streamed, not loaded whole)."""
         chunk_path = self._get_chunk_path(chunk_id)
         if not chunk_path.is_file():
             raise FileNotFoundError(f"Chunk not found: {chunk_id}")
@@ -111,7 +95,6 @@ class StorageManager:
         return digest.hexdigest()
 
     def list_chunks(self) -> list[str]:
-        """Ids of every chunk on disk; used for the registration chunk report."""
         return sorted(
             p.name
             for p in self.storage_path.iterdir()

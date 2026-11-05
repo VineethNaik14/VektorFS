@@ -15,11 +15,6 @@ from common.messages import (
 )
 from common.protocol import Command, ProtocolError
 
-# ---------------------------------------------------------------------------
-# Request builders + parse_request round trips
-# ---------------------------------------------------------------------------
-
-
 def test_store_request_round_trip():
     data = b"Hello VektorFS!"
     request = build_store_request("chunk1", data)
@@ -63,11 +58,6 @@ def test_info_request_round_trip():
     assert fields == {"chunk_id": "chunk1"}
 
 
-# ---------------------------------------------------------------------------
-# parse_request validation
-# ---------------------------------------------------------------------------
-
-
 def test_parse_request_rejects_unknown_command():
     with pytest.raises(ProtocolError):
         parse_request({"command": "DROP_TABLE", "chunk_id": "x"})
@@ -108,11 +98,6 @@ def test_parse_request_store_rejects_invalid_base64():
         parse_request(
             {"command": "STORE", "chunk_id": "chunk1", "data": "!!!not-base64!!!"}
         )
-
-
-# ---------------------------------------------------------------------------
-# Response builders + parse_response
-# ---------------------------------------------------------------------------
 
 
 def test_ok_response_with_extra_fields():

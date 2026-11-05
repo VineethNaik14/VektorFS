@@ -1,10 +1,3 @@
-"""Message contract for the Tracker (clients and storage nodes -> tracker).
-
-Mirrors common/messages.py: builders for senders, one validating parser for
-the receiver. Every limit here exists because the tracker parses JSON from
-the network and must not trust its size or shape.
-"""
-
 from __future__ import annotations
 
 import re
@@ -15,8 +8,8 @@ from common.messages import is_sha256_hex
 from common.protocol import ProtocolError
 
 MAX_NAME_LEN = 255
-MAX_CHUNKS_PER_FILE = 20_000          # bounds GET_FILE reply size (< 16 MiB frame)
-MAX_CHUNK_SIZE = 8 * 1024 * 1024      # base64(8 MiB) still fits in one frame
+MAX_CHUNKS_PER_FILE = 20_000          
+MAX_CHUNK_SIZE = 8 * 1024 * 1024      
 MAX_REPORTED_CHUNKS = 200_000
 MAX_REPLICAS_PER_CHUNK = 16
 
@@ -38,10 +31,6 @@ class TrackerCommand(str, Enum):
     STATUS = "STATUS"
     ABORT = "ABORT"
     SCRUB = "SCRUB"
-
-
-# ---------------------------------------------------------------- builders
-
 
 def build_register(node_id: str, host: str, port: int, chunks: list[str]) -> dict:
     return {"command": "REGISTER", "node_id": node_id, "host": host,
@@ -88,10 +77,6 @@ def build_abort(file_id: str) -> dict:
 def build_scrub() -> dict:
     return {"command": "SCRUB"}
 
-
-# ---------------------------------------------------------------- validators
-
-
 def _pattern(payload: dict, key: str, regex: re.Pattern) -> str:
     value = payload.get(key)
     if not isinstance(value, str) or not regex.fullmatch(value):
@@ -118,7 +103,6 @@ def _name(payload: dict) -> str:
 
 
 def parse_tracker_request(payload: dict[str, Any]) -> tuple[TrackerCommand, dict]:
-    """Validate a tracker request; return (command, cleaned fields)."""
     try:
         command = TrackerCommand(payload.get("command"))
     except ValueError as exc:

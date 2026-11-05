@@ -1,5 +1,3 @@
-"""Turn benchmarks/results/*.csv into PNG charts (needs pandas + matplotlib)."""
-
 from pathlib import Path
 
 import matplotlib

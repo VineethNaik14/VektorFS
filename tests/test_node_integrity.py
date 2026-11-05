@@ -62,11 +62,11 @@ async def test_replicate_refuses_corrupt_source_and_stores_nothing(two_nodes):
 @pytest.mark.asyncio
 async def test_replicate_reports_unreachable_or_missing_source(two_nodes):
     a, b = two_nodes
-    with pytest.raises(RemoteError) as e:                       # chunk absent on source
+    with pytest.raises(RemoteError) as e:                    
         await call(*b.address, build_replicate_request("nope", *a.address, sha(b"x")))
     assert e.value.code == "SOURCE_UNAVAILABLE"
     await a.stop()
-    with pytest.raises(RemoteError) as e:                       # source down
+    with pytest.raises(RemoteError) as e:                  
         await call(*b.address, build_replicate_request("c1", "127.0.0.1", 1, sha(b"x")), timeout=10)
     assert e.value.code == "SOURCE_UNAVAILABLE"
 

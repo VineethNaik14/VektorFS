@@ -29,7 +29,7 @@ async def test_register_heartbeat_and_unknown_node(tracker):
         await call(*tracker.address, build_heartbeat("stranger"))
     assert e.value.code == "UNKNOWN_NODE"
     status = await call(*tracker.address, build_status())
-    assert status["nodes"][0]["host"] == "127.0.0.1"      # inferred from the peer address
+    assert status["nodes"][0]["host"] == "127.0.0.1"   
 
 
 @pytest.mark.asyncio

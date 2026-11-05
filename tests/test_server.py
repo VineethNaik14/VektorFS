@@ -21,8 +21,6 @@ from node.storage import StorageManager
 @pytest_asyncio.fixture
 async def running_server(tmp_path: Path):
     storage = StorageManager(tmp_path)
-    # port=0 asks the OS for a free ephemeral port so tests never collide
-    # with each other or with anything already listening on the machine.
     node = StorageNodeServer(storage, host="127.0.0.1", port=0)
     await node.start()
     try:
@@ -41,11 +39,6 @@ async def open_client(
 async def close_client(writer: asyncio.StreamWriter) -> None:
     writer.close()
     await writer.wait_closed()
-
-
-# ---------------------------------------------------------------------------
-# Happy path: one client, full command lifecycle
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -94,11 +87,6 @@ async def test_connection_stays_open_across_multiple_requests(running_server):
         await close_client(writer)
 
 
-# ---------------------------------------------------------------------------
-# Error mapping
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_get_missing_chunk_returns_chunk_not_found(running_server):
     reader, writer = await open_client(running_server)
@@ -127,7 +115,6 @@ async def test_path_traversal_chunk_id_returns_invalid_chunk_id(running_server):
 async def test_malformed_json_gets_error_but_connection_survives(running_server):
     reader, writer = await open_client(running_server)
     try:
-        # Send a frame whose body isn't valid JSON.
         body = b"not json"
         header = len(body).to_bytes(4, "big")
         writer.write(header + body)
@@ -137,7 +124,6 @@ async def test_malformed_json_gets_error_but_connection_survives(running_server)
         with pytest.raises(ProtocolError, match="INVALID_REQUEST"):
             parse_response(response)
 
-        # Connection should still be usable afterwards.
         await write_message(writer, build_exists_request("whatever"))
         assert parse_response(await read_message(reader))["exists"] is False
     finally:
@@ -164,8 +150,6 @@ async def test_oversized_declared_length_closes_connection(running_server):
         writer.write(header)
         await writer.drain()
 
-        # Server tells us why, then closes rather than trying to keep
-        # reading from a stream it can no longer trust the framing of.
         response = await read_message(reader)
         with pytest.raises(ProtocolError, match="INVALID_REQUEST"):
             parse_response(response)
@@ -174,10 +158,6 @@ async def test_oversized_declared_length_closes_connection(running_server):
     finally:
         await close_client(writer)
 
-
-# ---------------------------------------------------------------------------
-# Timeouts
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -189,12 +169,6 @@ async def test_idle_connection_is_closed_after_timeout(running_server, monkeypat
         assert data == b""
     finally:
         await close_client(writer)
-
-
-# ---------------------------------------------------------------------------
-# Concurrency: two clients, two chunk ids, interleaved
-# ---------------------------------------------------------------------------
-
 
 @pytest.mark.asyncio
 async def test_concurrent_clients_do_not_interfere(running_server):

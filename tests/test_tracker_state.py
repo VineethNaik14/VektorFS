@@ -63,8 +63,8 @@ def test_ttl_failure_detector_with_fake_clock():
     assert s.expire_dead_nodes() == ["n2"]
     assert not s.nodes["n2"].alive
     assert all("n2" not in c.replicas for c in s.chunk_index.values())
-    assert s.heartbeat("n2") is False          # must re-register
-    assert s.expire_dead_nodes() == []         # not reported twice
+    assert s.heartbeat("n2") is False     
+    assert s.expire_dead_nodes() == []       
 
 
 def test_plan_replication_restores_rf_from_surviving_source():
@@ -91,7 +91,7 @@ def test_plan_replication_respects_inflight_and_skips_lost_chunks():
     s.remove_replica(cid, sorted(s.chunk_index[cid].replicas)[0])
     first = s.plan_replication(set())
     assert len(first) == 1
-    assert s.plan_replication({(cid, first[0].target.node_id)}) == []   # already scheduled
+    assert s.plan_replication({(cid, first[0].target.node_id)}) == []  
     for n in list(s.chunk_index[cid].replicas):
         s.remove_replica(cid, n)
     assert s.plan_replication(set()) == [] and s.chunk_health()["lost"] == 1
@@ -104,7 +104,7 @@ def test_register_is_authoritative_and_reports_orphans():
     holder = sorted(rec.chunks[0].replicas)[0]
     assert s.register_node(holder, "h", 1, [cid, "ghost_chunk"]) == ["ghost_chunk"]
     assert holder in s.chunk_index[cid].replicas
-    s.register_node(holder, "h", 1, [])                 # wiped disk
+    s.register_node(holder, "h", 1, [])           
     assert holder not in s.chunk_index[cid].replicas
 
 
@@ -126,7 +126,7 @@ def test_commit_rejects_bad_input_without_side_effects():
     assert "f" not in s.files and not s.chunk_index
     s.commit(p.file_id, SHA, good)
     with pytest.raises(StateError):
-        s.commit(p.file_id, SHA, good)                  # second commit: upload consumed
+        s.commit(p.file_id, SHA, good)               
 
 
 def test_delete_file_returns_gc_targets():

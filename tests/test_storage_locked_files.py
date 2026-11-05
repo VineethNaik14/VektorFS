@@ -10,7 +10,7 @@ from node.storage import StorageManager
 
 def _in_use() -> PermissionError:
     exc = PermissionError(13, "The process cannot access the file because it is being used")
-    exc.winerror = 32           # only exists natively on Windows; set it so we can simulate there
+    exc.winerror = 32        
     return exc
 
 
@@ -53,8 +53,7 @@ def test_real_permission_errors_are_not_retried(tmp_path, monkeypatch):
 
     def denied(self, *a, **kw):
         calls["n"] += 1
-        raise PermissionError(13, "Access is denied")   # no winerror 32
-
+        raise PermissionError(13, "Access is denied")  
     monkeypatch.setattr(type(tmp_path), "unlink", denied)
     with pytest.raises(PermissionError):
         sm.delete("abc")

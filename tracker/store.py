@@ -1,19 +1,3 @@
-"""Durable storage for the tracker's FILE metadata.
-
-Only file -> chunk(id, index, size, sha256) metadata is persisted. Replica
-*locations* are deliberately not stored: nodes re-report what is on their
-disks when they register, and a persisted location list could only be stale.
-
-Two interchangeable back ends share one tiny interface:
-
-  * JsonFileStore  - zero dependencies, atomic whole-file snapshots (default).
-  * PostgresStore  - transactional, row-per-file/chunk (needs `psycopg`).
-
-Both are synchronous and are called from worker threads by the tracker
-(asyncio.to_thread) under a single lock, so they never run concurrently and
-never block the event loop.
-"""
-
 from __future__ import annotations
 
 import json
@@ -33,16 +17,8 @@ class MetadataStore(Protocol):
 
 
 class JsonFileStore:
-    """Whole-file JSON snapshot, written atomically (tmp + fsync + rename).
-
-    The on-disk format ({"files": [...]}) is the same one ClusterState.save()
-    has always produced, so existing metadata files keep working.
-    """
-
     def __init__(self, path: str | Path):
         self.path = Path(path)
-        # Creating the directory here (and writing once below) means a bad
-        # --metadata-file path fails at startup, not on the first upload.
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._files: dict[str, dict[str, Any]] = {}
         if self.path.is_file():
@@ -56,7 +32,7 @@ class JsonFileStore:
 
     def put_file(self, record: dict[str, Any]) -> None:
         updated = {**self._files, record["name"]: record}
-        self._flush(updated)            # only adopt the new state once it is on disk
+        self._flush(updated)         
         self._files = updated
 
     def delete_file(self, name: str) -> None:
@@ -97,15 +73,11 @@ CREATE TABLE IF NOT EXISTS chunks (
 
 
 class PostgresStore:
-    """PostgreSQL back end. `psycopg` (v3) is imported lazily so the rest of
-    VektorFS stays dependency-free unless this store is actually selected."""
-
     def __init__(self, dsn: str):
         try:
             import psycopg
-        except ImportError as exc:      # pragma: no cover - environment specific
+        except ImportError as exc:      
             raise RuntimeError(
-                "PostgreSQL support needs psycopg: pip install 'psycopg[binary]'"
             ) from exc
         self._psycopg = psycopg
         self.dsn = dsn
@@ -118,7 +90,6 @@ class PostgresStore:
         return self._conn
 
     def _with_conn(self, work):
-        """Run `work(conn)` in one transaction; reconnect once if the link dropped."""
         for attempt in (1, 2):
             conn = self._connect()
             try:
@@ -135,7 +106,7 @@ class PostgresStore:
         if self._conn is not None:
             try:
                 self._conn.close()
-            except Exception:           # noqa: BLE001 - already broken
+            except Exception:           
                 pass
             self._conn = None
 
@@ -180,7 +151,6 @@ class PostgresStore:
 
 
 def open_store(metadata_file: str | None = None, postgres_dsn: str | None = None):
-    """Pick a back end from CLI/env settings. Postgres wins if both are given."""
     if postgres_dsn:
         logger.info("using PostgreSQL metadata store")
         return PostgresStore(postgres_dsn)

@@ -51,12 +51,6 @@ def reassemble_file(chunk_paths: list[str], output_file: str,) -> Path:
 
     return output
 
-# ---------------------------------------------------------------------------
-# Streaming helpers used by the client. chunk_file() above writes every chunk
-# to disk first (doubling disk usage); for uploads we instead scan once for
-# hashes and later read one chunk at a time, so memory stays bounded.
-# ---------------------------------------------------------------------------
-
 import hashlib
 from dataclasses import dataclass
 
@@ -76,19 +70,16 @@ class FileScan:
 
 
 def chunk_count(size: int, chunk_size: int = CHUNK_SIZE) -> int:
-    """Number of chunks for a file of `size` bytes (0 for an empty file)."""
     return -(-size // chunk_size)
 
 
 def read_chunk(file_path: str, index: int, chunk_size: int = CHUNK_SIZE) -> bytes:
-    """Read exactly one chunk by index without loading the rest of the file."""
     with open(file_path, "rb") as file:
         file.seek(index * chunk_size)
         return file.read(chunk_size)
 
 
 def scan_file(file_path: str, chunk_size: int = CHUNK_SIZE) -> FileScan:
-    """One pass over the file: whole-file SHA-256 plus per-chunk size/SHA-256."""
     source = Path(file_path)
     if not source.is_file():
         raise FileNotFoundError(f"File not found: {source}")

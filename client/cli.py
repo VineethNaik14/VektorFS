@@ -1,5 +1,3 @@
-"""Command-line front end:  python -m client.cli --tracker HOST:PORT <command>"""
-
 from __future__ import annotations
 
 import argparse

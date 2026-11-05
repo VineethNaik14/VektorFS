@@ -1,12 +1,3 @@
-"""One-shot request/response helper over the framed protocol.
-
-Used by the client (-> tracker, -> nodes), the tracker (-> nodes) and the
-nodes (-> tracker, -> peer nodes). One connection per call keeps failure
-handling trivial: any exception means "this attempt failed", and there is no
-half-broken pooled socket to reason about. (A connection pool is a later
-optimisation once benchmarking shows connect cost matters.)
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -25,17 +16,6 @@ async def call(
     *,
     timeout: float = DEFAULT_TIMEOUT,
 ) -> dict[str, Any]:
-    """Send one request, return the OK response.
-
-    The single `timeout` bounds connect + send + receive together, so a
-    black-holed or frozen peer can never hang the caller.
-
-    Raises:
-        asyncio.TimeoutError, OSError/ConnectionError: peer unreachable/slow.
-        RemoteError (a ProtocolError): peer replied status=ERROR.
-        ProtocolError: garbage reply.
-    """
-
     async def _exchange() -> dict[str, Any]:
         reader, writer = await asyncio.open_connection(host, port)
         try:

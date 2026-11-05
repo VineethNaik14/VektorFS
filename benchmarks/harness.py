@@ -1,9 +1,3 @@
-"""Launch a REAL multi-process VektorFS cluster (1 tracker + N node processes).
-
-Used by the benchmarks and the demo. Separate OS processes (not in-process
-tasks) so nodes genuinely run in parallel and `kill()` is a true SIGKILL.
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -38,7 +32,6 @@ class ProcessCluster:
         self._logs = []
         self.env = {**os.environ, "PYTHONPATH": str(ROOT), "PYTHONUNBUFFERED": "1"}
 
-    # -- process control -----------------------------------------------------
     def _spawn(self, name: str, *args: str) -> None:
         self.dir.mkdir(parents=True, exist_ok=True)
         log = open(self.dir / f"{name}.log", "ab")
@@ -55,7 +48,6 @@ class ProcessCluster:
                     "--tracker", f"127.0.0.1:{self.tracker_port}", "--advertise-host", "127.0.0.1")
 
     def kill_node(self, node_id: str) -> None:
-        """SIGKILL / TerminateProcess: no shutdown code runs, like a real crash."""
         p = self.procs[node_id]
         p.kill()
         p.wait(timeout=10)
@@ -90,13 +82,12 @@ class ProcessCluster:
         async def check() -> bool:
             try:
                 st = await self.client(timeout=2).status()
-            except Exception:       # noqa: BLE001 - not up yet
+            except Exception:   
                 return False
             return sum(x["alive"] for x in st["nodes"]) == n
         return check
 
     async def wait_for(self, pred, timeout: float = 30.0, what: str = "condition") -> float:
-        """Poll an async predicate; returns seconds waited."""
         t0 = time.monotonic()
         while True:
             if await pred():

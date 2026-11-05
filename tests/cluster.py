@@ -14,7 +14,7 @@ from tracker.server import TrackerServer
 
 
 class TestNode:
-    __test__ = False  # not a pytest class
+    __test__ = False 
 
     def __init__(self, node_id: str, directory: Path, tracker_addr):
         self.node_id, self.dir, self.tracker_addr = node_id, directory, tracker_addr
@@ -52,7 +52,7 @@ class Cluster:
         self.metadata_path = tmp / "tracker.json" if metadata else None
         self.tracker: TrackerServer | None = None
         self.nodes: list[TestNode] = []
-        self.store_factory = None   # optional: build a fresh metadata store per tracker
+        self.store_factory = None   
 
     def _new_tracker(self, port: int = 0) -> TrackerServer:
         return TrackerServer("127.0.0.1", port, replication_factor=self.rf,
@@ -81,7 +81,7 @@ class Cluster:
         host, port = self.tracker.address
         await self.tracker.stop()
         self._addr = (host, port)
-        self.tracker = self._new_tracker(port)   # same port: nodes keep their config
+        self.tracker = self._new_tracker(port)  
         await self.tracker.start()
 
     async def wait_for(self, predicate, timeout: float = 10.0) -> None:
@@ -92,7 +92,6 @@ class Cluster:
             await asyncio.sleep(0.05)
 
     def holders(self, chunk_id: str) -> list[TestNode]:
-        """Alive nodes that really have the chunk on disk (ground truth)."""
         return [n for n in self.nodes if n.alive and n.storage.exists(chunk_id)]
 
     async def stop(self) -> None:

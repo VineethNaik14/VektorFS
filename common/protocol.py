@@ -14,7 +14,7 @@ from typing import Any
 HEADER_SIZE = 4
 MAX_MESSAGE_SIZE = (
     16 * 1024 * 1024
-)  # 16 MiB: covers a 4MB chunk after base64 (+~33%) plus metadata
+)
 
 
 class Command(str, Enum):
@@ -23,7 +23,7 @@ class Command(str, Enum):
     DELETE = "DELETE"
     EXISTS = "EXISTS"
     INFO = "INFO"
-    REPLICATE = "REPLICATE"  # tracker -> node: "pull this chunk from a peer"
+    REPLICATE = "REPLICATE" 
 
 
 class ProtocolError(Exception):
@@ -35,7 +35,6 @@ class MessageTooLargeError(ProtocolError):
 
 
 def encode_message(payload: dict[str, Any]) -> bytes:
-    """Serialize a payload dict into a length-prefixed frame."""
     try:
         body = json.dumps(payload).encode("utf-8")
     except (TypeError, ValueError) as exc:
@@ -51,13 +50,6 @@ def encode_message(payload: dict[str, Any]) -> bytes:
 
 
 async def read_message(reader: asyncio.StreamReader) -> dict[str, Any]:
-    """Read one length-prefixed JSON message from an asyncio stream.
-
-    Raises:
-        ConnectionError: peer closed the connection mid-message.
-        MessageTooLargeError: declared length exceeds MAX_MESSAGE_SIZE.
-        ProtocolError: body is not valid JSON / not a dict.
-    """
     try:
         header = await reader.readexactly(HEADER_SIZE)
     except asyncio.IncompleteReadError as exc:
@@ -87,18 +79,15 @@ async def read_message(reader: asyncio.StreamReader) -> dict[str, Any]:
 
 
 async def write_message(writer: asyncio.StreamWriter, payload: dict[str, Any]) -> None:
-    """Encode and send a message, then flush the socket buffer."""
     writer.write(encode_message(payload))
     await writer.drain()
 
 
 def encode_chunk_data(data: bytes) -> str:
-    """Encode raw chunk bytes for embedding in a JSON payload."""
     return base64.b64encode(data).decode("ascii")
 
 
 def decode_chunk_data(encoded: str) -> bytes:
-    """Decode chunk bytes previously produced by encode_chunk_data."""
     try:
         return base64.b64decode(encoded, validate=True)
     except (ValueError, TypeError) as exc:

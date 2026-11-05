@@ -1,10 +1,3 @@
-"""Request/response message contract for VektorFS storage-node commands.
-
-This is the single source of truth for wire shapes. Client code and the
-Storage Node handler must both import from here instead of hand-building
-dicts, so the two sides can never silently drift apart.
-"""
-
 from __future__ import annotations
 
 import re
@@ -24,10 +17,8 @@ class ErrorCode(str, Enum):
     INVALID_CHUNK_ID = "INVALID_CHUNK_ID"
     CHUNK_NOT_FOUND = "CHUNK_NOT_FOUND"
     INTERNAL_ERROR = "INTERNAL_ERROR"
-    # storage-node errors added for integrity / replication
     CHECKSUM_MISMATCH = "CHECKSUM_MISMATCH"
     SOURCE_UNAVAILABLE = "SOURCE_UNAVAILABLE"
-    # tracker errors
     FILE_NOT_FOUND = "FILE_NOT_FOUND"
     FILE_EXISTS = "FILE_EXISTS"
     NO_NODES_AVAILABLE = "NO_NODES_AVAILABLE"
@@ -37,27 +28,11 @@ class ErrorCode(str, Enum):
 
 
 class RemoteError(ProtocolError):
-    """The peer answered with status=ERROR. `.code` holds the ErrorCode string.
-
-    Subclasses ProtocolError so existing `except ProtocolError` callers keep
-    working, while new callers can branch on the machine-readable code
-    instead of string-matching the message.
-    """
-
     def __init__(self, code: str, message: str):
         super().__init__(f"Server error [{code}]: {message}")
         self.code = code
 
-
-# ---------------------------------------------------------------------------
-# Request builders (Client -> Storage Node)
-# ---------------------------------------------------------------------------
-
-
-def build_store_request(
-    chunk_id: str, data: bytes, sha256: str | None = None
-) -> dict[str, Any]:
-    """`sha256` (optional) lets the node verify the bytes it received."""
+def build_store_request(chunk_id: str, data: bytes, sha256: str | None = None) -> dict[str, Any]:
     request: dict[str, Any] = {
         "command": Command.STORE.value,
         "chunk_id": chunk_id,
@@ -84,10 +59,7 @@ def build_info_request(chunk_id: str) -> dict[str, Any]:
     return {"command": Command.INFO.value, "chunk_id": chunk_id}
 
 
-def build_replicate_request(
-    chunk_id: str, source_host: str, source_port: int, sha256: str
-) -> dict[str, Any]:
-    """Tracker -> node: fetch `chunk_id` from a peer, verify it, store it."""
+def build_replicate_request(chunk_id: str, source_host: str, source_port: int, sha256: str) -> dict[str, Any]:
     return {
         "command": Command.REPLICATE.value,
         "chunk_id": chunk_id,
@@ -96,23 +68,12 @@ def build_replicate_request(
         "sha256": sha256,
     }
 
-
-# ---------------------------------------------------------------------------
-# Response builders (Storage Node -> Client)
-# ---------------------------------------------------------------------------
-
-
 def build_ok_response(**fields: Any) -> dict[str, Any]:
     return {"status": Status.OK.value, **fields}
 
 
 def build_error_response(code: ErrorCode, message: str) -> dict[str, Any]:
     return {"status": Status.ERROR.value, "error": code.value, "message": message}
-
-
-# ---------------------------------------------------------------------------
-# Request parsing/validation (Storage Node side)
-# ---------------------------------------------------------------------------
 
 REQUIRED_FIELDS: dict[Command, tuple[str, ...]] = {
     Command.STORE: ("chunk_id", "data"),
@@ -131,15 +92,7 @@ def is_sha256_hex(value: Any) -> bool:
 
 
 def parse_request(payload: dict[str, Any]) -> tuple[Command, dict[str, Any]]:
-    """Validate an incoming request payload.
-
-    Returns:
-        (command, fields) where fields contains only the validated,
-        command-specific keys (e.g. chunk_id, and decoded raw bytes for STORE).
-
-    Raises:
-        ProtocolError: unknown command, missing fields, or wrong field types.
-    """
+    
     raw_command = payload.get("command")
     try:
         command = Command(raw_command)
@@ -171,7 +124,6 @@ def parse_request(payload: dict[str, Any]) -> tuple[Command, dict[str, Any]]:
         host, port = payload["source_host"], payload["source_port"]
         if not isinstance(host, str) or not host or len(host) > 255:
             raise ProtocolError("source_host must be a non-empty string")
-        # bool is an int subclass; reject it explicitly.
         if not isinstance(port, int) or isinstance(port, bool) or not 0 < port < 65536:
             raise ProtocolError("source_port must be an integer in 1..65535")
         if not is_sha256_hex(payload["sha256"]):
@@ -180,20 +132,7 @@ def parse_request(payload: dict[str, Any]) -> tuple[Command, dict[str, Any]]:
 
     return command, fields
 
-
-# ---------------------------------------------------------------------------
-# Response parsing (Client side)
-# ---------------------------------------------------------------------------
-
-
 def parse_response(payload: dict[str, Any]) -> dict[str, Any]:
-    """Validate an incoming response payload and normalize it.
-
-    Raises:
-        ProtocolError: missing/invalid 'status', or an ERROR response
-            (raised as ProtocolError with the server's message so callers
-            get a single exception type to handle).
-    """
     status = payload.get("status")
 
     if status == Status.OK.value:

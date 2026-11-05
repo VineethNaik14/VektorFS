@@ -1,10 +1,3 @@
-"""Storage-node side of the tracker relationship: register, then heartbeat.
-
-Kept separate from server.py on purpose: server.py answers requests, this
-module *initiates* them. A node with no tracker (unit tests, standalone use)
-simply never starts an agent.
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -35,13 +28,10 @@ class TrackerAgent:
         self.tracker = tracker
         self.advertise_host = advertise_host
         self.advertise_port = advertise_port
-        self.heartbeat_interval = 2.0  # replaced by the tracker's value
+        self.heartbeat_interval = 2.0  
         self.registered = False
 
     async def register(self) -> None:
-        # The chunk report is how the tracker learns what this node holds
-        # after a restart - and how it spots chunks that were deleted while
-        # we were away (returned as "orphans").
         chunks = await asyncio.to_thread(self.storage.list_chunks)
         response = await call(
             *self.tracker,
@@ -63,7 +53,6 @@ class TrackerAgent:
         )
 
     async def run(self) -> None:
-        """Forever: (re)register when needed, otherwise heartbeat."""
         while True:
             was_registered = self.registered
             try:
@@ -76,12 +65,9 @@ class TrackerAgent:
                         timeout=RPC_TIMEOUT_SECONDS,
                     )
             except RemoteError as exc:
-                # Tracker restarted or declared us dead: our identity is
-                # gone, so introduce ourselves (and our chunks) again.
                 logger.warning("tracker rejected us (%s); re-registering", exc.code)
                 self.registered = False
                 if not was_registered:
-                    # register() itself was refused: don't spin on it.
                     await asyncio.sleep(RETRY_DELAY_SECONDS)
                 continue
             except (asyncio.TimeoutError, OSError, ConnectionError) as exc:
